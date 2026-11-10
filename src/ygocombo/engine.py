@@ -128,7 +128,12 @@ class OCG_QueryInfo(Structure):
 
 
 def default_library_path(root: Path) -> Path:
-    name = "libocgcore.dylib" if sys.platform == "darwin" else "libocgcore.so"
+    if sys.platform == "win32":
+        name = "ocgcore.dll"
+    elif sys.platform == "darwin":
+        name = "libocgcore.dylib"
+    else:
+        name = "libocgcore.so"
     return root / "build" / name
 
 
@@ -139,7 +144,7 @@ class Environment:
         library = Path(library)
         script_dir = Path(script_dir)
         if not library.is_file():
-            raise EngineError(f"engine library not found: {library} (run scripts/build_engine.sh)")
+            raise EngineError(f"engine library not found: {library} (run scripts/build_engine.sh, or scripts/build_engine.ps1 on Windows)")
         if not script_dir.is_dir():
             raise EngineError(f"card script folder not found: {script_dir}")
 

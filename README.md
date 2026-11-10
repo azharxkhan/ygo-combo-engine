@@ -20,6 +20,22 @@ python3 -m pip install pytest
 PYTHONPATH=src python3 -m pytest -q
 ```
 
+## Setup (Windows, native)
+
+Needs: Git for Windows (for Git Bash), Python 3.10+, and Visual Studio 2019 or
+later with the "Desktop development with C++" workload (or the Build Tools).
+
+In Git Bash:
+
+```bash
+scripts/fetch_vendor.sh
+powershell -ExecutionPolicy Bypass -File scripts/build_engine.ps1   # builds build/ocgcore.dll
+python -m pip install pytest
+PYTHONPATH=src python -m pytest -q
+```
+
+On Windows use `python` instead of `python3` in the commands below.
+
 ## Use
 
 List the legal first moves for a hand:
