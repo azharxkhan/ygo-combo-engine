@@ -1,0 +1,15 @@
+# Downloaded third-party code and data (fetch with scripts/fetch_vendor.sh)
+vendor/
+# Compiled engine
+build/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+# Never commit secrets
+.env
+.env.*
+*.key
+*.pem
+# Original upload archive
+*.zip
