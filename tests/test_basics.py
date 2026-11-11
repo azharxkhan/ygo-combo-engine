@@ -81,6 +81,22 @@ def test_search_finds_mechaba(env, scenario):
     assert any("Invoked Mechaba" in name for name in result.lines[0].board["monster zone"])
 
 
+def test_search_does_not_loop_on_cancel(env, scenario):
+    """Regression: cancelling the fusion material prompt used to send the search
+    back to the fusion monster prompt forever, so it never reached Mechaba."""
+    from ygocombo.goldfish import Scenario
+    from ygocombo.search import BoardScorer, ComboSearch, Limits
+
+    # Terraforming, Ash Blossom, Effect Veiler, Nibiru, Infinite Impermanence
+    hand = (73628505, 14558127, 97268402, 27204311, 10045474)
+    result = ComboSearch(
+        env, Scenario(scenario.deck, hand), limits=Limits(max_nodes=2000, max_seconds=120),
+        scorer=BoardScorer(env, (MECHABA,)), keep=1,
+    ).run()
+    assert result.stopped_by == "finished"
+    assert any("Invoked Mechaba" in name for name in result.lines[0].board["monster zone"])
+
+
 def test_limits_are_validated():
     from ygocombo.search import Limits
 

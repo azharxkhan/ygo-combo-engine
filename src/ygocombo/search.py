@@ -34,6 +34,7 @@ NODE_LIMIT_MAX = 200_000
 DEPTH_LIMIT_MAX = 200
 TIME_LIMIT_MAX = 3600.0
 PENDING_BRANCH_MAX = 100_000
+RESPONSES_PER_LINE_MAX = 2_000  # engine answers in one line, including forced ones
 
 _IDLE_ORDER = {"activate": 0, "spsummon": 1, "summon": 2, "sset": 3, "mset": 4, "reposition": 5}
 _FIRST_ONLY_KINDS = {"place", "position", "sort", "rps"}
@@ -184,6 +185,9 @@ class ComboSearch:
                 turns_seen += self._advance(duel)
                 if duel.ended or turns_seen > 1:
                     return  # game over, or something moved us to the next turn
+                if len(responses) >= RESPONSES_PER_LINE_MAX:
+                    result.dead_ends += 1  # runaway line, most likely a prompt loop
+                    return
                 decision = parse_decision(duel.pending, self.env.db)
                 if decision.truncated:
                     result.truncated_decisions += 1
@@ -214,6 +218,8 @@ class ComboSearch:
                     if decision.kind != "idle":
                         result.dead_ends += 1
                     return
+                if len(options) > 1 and depth >= self.limits.max_depth:
+                    return  # depth cap applies inside effects too, not only at idle
 
                 first, rest = options[0], options[1:]
                 # Untried siblings go on the stack; reversed so they pop in order.
@@ -256,7 +262,12 @@ class ComboSearch:
             return [c for c in choices if c.action in ("main_phase_2", "end_phase")][:1]
         if decision.kind in _FIRST_ONLY_KINDS:
             return choices[:1]
-        return _drop_identical(choices)
+        # Cancelling partway through an effect only rewinds to an earlier prompt,
+        # which loops forever (e.g. pick fusion monster, cancel materials, pick
+        # again). Not using the card at all is already tried at the idle prompt.
+        # Keep cancel only when it is the sole legal answer.
+        uncancelled = [c for c in choices if c.action != "cancel"]
+        return _drop_identical(uncancelled or choices)
 
     def _record(self, duel: Duel, steps: list[str], board_key: tuple, best: dict) -> None:
         score = self.scorer.score(duel)
