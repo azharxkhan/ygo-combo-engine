@@ -137,6 +137,13 @@ def default_library_path(root: Path) -> Path:
     return root / "build" / name
 
 
+def project_databases(root: Path) -> list[Path]:
+    """The card database files, in load order, for the standard project layout."""
+    cdb_dir = Path(root) / "vendor" / "BabelCDB"
+    # Newest official releases live in their own files until merged.
+    return [cdb_dir / "cards.cdb", *sorted(cdb_dir.glob("release-*.cdb"))]
+
+
 class Environment:
     """Engine library + card data + card scripts. Create once, reuse."""
 
@@ -175,13 +182,9 @@ class Environment:
     def from_project_root(cls, root: Path) -> "Environment":
         """Standard layout: build/ for the library, vendor/ for data."""
         root = Path(root)
-        cdb_dir = root / "vendor" / "BabelCDB"
-        databases = [cdb_dir / "cards.cdb"]
-        # Newest official releases live in their own files until merged.
-        databases += sorted(cdb_dir.glob("release-*.cdb"))
         return cls(
             library=default_library_path(root),
-            databases=databases,
+            databases=project_databases(root),
             script_dir=root / "vendor" / "CardScripts",
         )
 

@@ -2,6 +2,7 @@
 
   python -m ygocombo moves --deck decks/x.ydk --hand "Card A, Card B"
   python -m ygocombo solve --deck decks/x.ydk --hand "Card A, Card B" --want "Boss Monster"
+  python -m ygocombo import "ydke://..." --name my_deck
 """
 
 from __future__ import annotations
@@ -13,9 +14,12 @@ from pathlib import Path
 from .carddb import CardDatabase
 from .decisions import parse_decision
 from .deck import DeckError, load_ydk, validate_deck
-from .engine import EngineError, Environment
+from .engine import EngineError, Environment, project_databases
 from .goldfish import HAND_MAX, Scenario, board_summary, new_duel
+from .importer import check_deck_name, parse_text, read_deck, save_deck, to_ydke
 from .search import BoardScorer, ComboSearch, Limits
+
+MAX_STDIN_CHARS = 64 * 1024
 
 MAX_LIST_ARG_CHARS = 2000
 MAX_NAME_CHARS = 120
@@ -133,6 +137,34 @@ def cmd_solve(args) -> int:
     return 0
 
 
+def cmd_import(args) -> int:
+    check_deck_name(args.name)  # fail before doing any work
+    try:
+        db = CardDatabase(project_databases(Path(args.root)))
+    except FileNotFoundError as exc:
+        raise InputError(f"{exc} (run scripts/fetch_vendor.sh)") from exc
+    if args.source == "-":
+        text = sys.stdin.read(MAX_STDIN_CHARS + 1)
+        if len(text) > MAX_STDIN_CHARS:
+            raise InputError(f"pasted decklist is too long (limit {MAX_STDIN_CHARS} characters)")
+        deck, kind = parse_text(text, db)
+    else:
+        deck, kind = read_deck(args.source, db)
+    validate_deck(deck, db, enforce_size=not args.any_size)
+    path = save_deck(deck, Path(args.root) / "decks", args.name, overwrite=args.force)
+
+    print(f"Imported {kind}: {len(deck.main)} main, {len(deck.extra)} extra, {len(deck.side)} side")
+    for label, cards in (("Main", deck.main), ("Extra", deck.extra), ("Side", deck.side)):
+        if cards:
+            counts: dict[int, int] = {}
+            for code in cards:
+                counts[code] = counts.get(code, 0) + 1
+            print(f"  {label}: " + ", ".join(f"{n}x {db.name(c)}" for c, n in counts.items()))
+    print(f"Saved {path}")
+    print(f"Share as: {to_ydke(deck)}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ygocombo", description=__doc__.splitlines()[0])
     parser.add_argument("--root", default=".", help="project root (has build/ and vendor/)")
@@ -157,12 +189,19 @@ def build_parser() -> argparse.ArgumentParser:
     solve.add_argument("--keep", type=int, default=3, help="how many lines to show")
     solve.add_argument("--include-sets", action="store_true", help="also try setting cards")
     solve.set_defaults(func=cmd_solve)
+
+    imp = sub.add_parser("import", help="import a deck (ydke://, .ydk or text list) into decks/")
+    imp.add_argument("source", help="a ydke:// string, a .ydk or .txt file, or - to paste text")
+    imp.add_argument("--name", required=True, help="save as decks/NAME.ydk (letters, digits, - and _)")
+    imp.add_argument("--force", action="store_true", help="replace an existing deck with that name")
+    imp.add_argument("--any-size", action="store_true", help="skip 40-60 card size check")
+    imp.set_defaults(func=cmd_import)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.seed < 0 or args.seed > 2**32:
+    if hasattr(args, "seed") and not 0 <= args.seed <= 2**32:
         print("error: --seed must be between 0 and 4294967296", file=sys.stderr)
         return 2
     try:

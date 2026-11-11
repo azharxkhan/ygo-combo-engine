@@ -60,6 +60,31 @@ If a card name has a comma in it, separate the cards with `;` instead:
 `--hand "Nibiru, the Primal Being; Ash Blossom & Joyous Spring; Terraforming"`.
 Deck files are `.ydk` (export from EDOPro or YGOPRODeck).
 
+## Import decks
+
+Found a deck online? Import it into `decks/`:
+
+```bash
+# a ydke:// string (EDOPro, Dueling Nexus, YGOPRODeck "Export Deck")
+PYTHONPATH=src python3 -m ygocombo import "ydke://...!...!...!" --name tenpai
+
+# a .ydk file or a plain text list
+PYTHONPATH=src python3 -m ygocombo import ~/Downloads/list.txt --name snake_eye
+
+# paste a list, then Ctrl+D (Ctrl+Z then Enter on Windows)
+PYTHONPATH=src python3 -m ygocombo import - --name pasted
+```
+
+A text list has one card per line, with an optional count: `3 Ash Blossom & Joyous Spring`,
+`2x Called by the Grave` or `Invoked Mechaba x2`. Lines `Main Deck`, `Extra Deck` and
+`Side Deck` start each section. With no section lines, Extra Deck monsters are sorted into
+the extra deck automatically. Names must match exactly, and every card is checked against
+the database. The deck is saved as `decks/<name>.ydk`, and the command also prints a
+`ydke://` string you can paste back into EDOPro.
+
+Good places to find decks: tournament results on
+[YGOPRODeck](https://ygoprodeck.com/tournaments/) (use "Export Deck" on a deck page).
+
 ## Limits to know about
 
 - Goldfish only: the opponent has no cards and never responds.
