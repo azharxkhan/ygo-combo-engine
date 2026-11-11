@@ -74,7 +74,9 @@ class SearchResult:
     duplicates: int = 0
     truncated_decisions: int = 0
     seconds: float = 0.0
-    stopped_by: str = "finished"  # finished | max_nodes | max_seconds
+    stopped_by: str = "finished"  # finished | goal | max_nodes | max_seconds
+    reached_goal: bool = False  # a position had every wanted card on the field
+    goal_steps: tuple[str, ...] = ()  # the first line found that reached it
 
 
 class BoardScorer:
@@ -106,6 +108,25 @@ class BoardScorer:
         total += duel.count(0, C.LOCATION_HAND)
         return total
 
+    def meets_goal(self, duel: Duel) -> bool:
+        """True when every wanted card is on the field (monsters face-up).
+
+        With no wanted cards there is no goal.
+        """
+        if not self.wanted:
+            return False
+        on_field = [card.code for card in duel.cards_in(0, C.LOCATION_MZONE)
+                    if card.position & C.POS_FACEUP]
+        on_field += [card.code for card in duel.cards_in(0, C.LOCATION_SZONE)]
+        missing = set(self.wanted)
+        for code in on_field:
+            record = self.db.get(code)
+            for key in (code, record.alias if record else None):
+                if key in missing:
+                    missing.discard(key)
+                    break
+        return not missing
+
     def _is_wanted(self, code: int) -> bool:
         if code in self.wanted:
             return True
@@ -129,6 +150,7 @@ class ComboSearch:
         limits: Limits | None = None,
         scorer: BoardScorer | None = None,
         keep: int = 5,
+        stop_at_goal: bool = False,
     ):
         if not 1 <= keep <= 100:
             raise ValueError("keep must be 1-100")
@@ -137,6 +159,7 @@ class ComboSearch:
         self.limits = limits or Limits()
         self.scorer = scorer or BoardScorer(env)
         self.keep = keep
+        self.stop_at_goal = stop_at_goal  # end the search once scorer.meets_goal()
 
     # ---- public
 
@@ -202,6 +225,14 @@ class ComboSearch:
                     result.nodes += 1
                     fingerprint = _fingerprint(duel, decision)
                     self._record(duel, steps, fingerprint[0], best)
+                    if self.scorer.meets_goal(duel):
+                        if not result.reached_goal:
+                            result.reached_goal = True
+                            result.goal_steps = tuple(steps)
+                        if self.stop_at_goal:
+                            result.stopped_by = "goal"
+                            stack.clear()
+                            return
                     if fingerprint in seen:
                         result.duplicates += 1
                         return

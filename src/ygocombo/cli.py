@@ -2,6 +2,7 @@
 
   python -m ygocombo moves --deck decks/x.ydk --hand "Card A, Card B"
   python -m ygocombo solve --deck decks/x.ydk --hand "Card A, Card B" --want "Boss Monster"
+  python -m ygocombo odds --deck decks/x.ydk --want "Boss Monster" --hands 50
   python -m ygocombo import "ydke://..." --name my_deck
 """
 
@@ -17,6 +18,7 @@ from .deck import DeckError, load_ydk, validate_deck
 from .engine import EngineError, Environment, project_databases
 from .goldfish import HAND_MAX, Scenario, board_summary, new_duel
 from .importer import check_deck_name, parse_text, read_deck, save_deck, to_ydke
+from .odds import TOTAL_SECONDS_MAX, HandResult, check_settings, run_odds, wilson_interval
 from .search import BoardScorer, ComboSearch, Limits
 
 MAX_STDIN_CHARS = 64 * 1024
@@ -137,6 +139,58 @@ def cmd_solve(args) -> int:
     return 0
 
 
+def cmd_odds(args) -> int:
+    env = Environment.from_project_root(Path(args.root))
+    deck = load_ydk(Path(args.deck))
+    validate_deck(deck, env.db, enforce_size=not args.any_size)
+    wanted = resolve_cards(args.want, env.db, limit=MAX_WANTED, what="--want")
+    db = env.db
+
+    def show(number: int, hand: HandResult) -> None:
+        names = ", ".join(db.name(code) for code in hand.hand)
+        note = " (same cards as an earlier hand)" if hand.cached else f" ({hand.seconds:.1f}s)"
+        print(f"  {number:>4}. {hand.outcome.upper():<7} {names}{note}", flush=True)
+        if args.show_lines and hand.outcome == "hit" and not hand.cached:
+            for step_number, step in enumerate(hand.steps, start=1):
+                print(f"          {step_number}. {step}")
+
+    try:
+        check_settings(args.hands, args.hand_size, args.seed)
+        limits = Limits(max_nodes=args.max_nodes, max_depth=args.max_depth,
+                        max_seconds=args.max_seconds, include_sets=args.include_sets)
+        if not 0 < args.total_seconds <= TOTAL_SECONDS_MAX:
+            raise ValueError(f"--total-seconds must be above 0 and at most {TOTAL_SECONDS_MAX:g}")
+        print(f"Drawing {args.hands} hands of {args.hand_size} cards (seed {args.seed}). "
+              "Each one is searched for the wanted board.", flush=True)
+        result = run_odds(env, deck, wanted, hands=args.hands, hand_size=args.hand_size,
+                          seed=args.seed, limits=limits, total_seconds=args.total_seconds,
+                          on_hand=show)
+    except ValueError as exc:
+        raise InputError(str(exc)) from exc
+
+    total = len(result.hands)
+    hits, misses, unknown = result.count("hit"), result.count("miss"), result.count("unknown")
+    want_names = ", ".join(db.name(code) for code in wanted)
+    print(f"\nWanted on the field: {want_names}")
+    print(f"Searched {total} hands in {result.seconds:.0f}s: "
+          f"{hits} hit, {misses} miss, {unknown} unknown.")
+    if result.stopped_by == "total_seconds":
+        print(f"Stopped early: --total-seconds ran out before all {args.hands} hands were done.")
+    if not total:
+        return 0
+    print(f"Hit rate: {result.low:.0%}", end="")
+    if unknown:
+        print(f" to {result.high:.0%} (unknown hands counted as miss / as hit)", end="")
+    print()
+    low, high = wilson_interval(hits, total)
+    print(f"With {total} hands, the true rate is likely between {low:.0%} and {high:.0%} "
+          "(95% range, unknown hands counted as miss). More hands make this range narrower.")
+    if unknown:
+        print("Unknown = the search hit its limit before finding the board. "
+              "Raise --max-nodes / --max-seconds to settle them.")
+    return 0
+
+
 def cmd_import(args) -> int:
     check_deck_name(args.name)  # fail before doing any work
     try:
@@ -189,6 +243,21 @@ def build_parser() -> argparse.ArgumentParser:
     solve.add_argument("--keep", type=int, default=3, help="how many lines to show")
     solve.add_argument("--include-sets", action="store_true", help="also try setting cards")
     solve.set_defaults(func=cmd_solve)
+
+    odds = sub.add_parser("odds", help="how often a random hand reaches the wanted board")
+    odds.add_argument("--deck", required=True, help="path to a .ydk deck file")
+    odds.add_argument("--want", required=True, help="cards that must all be on the field (same format as --hand)")
+    odds.add_argument("--hands", type=int, default=50, help="random hands to try (default 50, max 1000)")
+    odds.add_argument("--hand-size", type=int, default=5, help="5 (default) or 6")
+    odds.add_argument("--seed", type=int, default=1, help="seed for drawing hands (default 1)")
+    odds.add_argument("--max-nodes", type=int, default=300, help="search limit per hand (default 300)")
+    odds.add_argument("--max-depth", type=int, default=40)
+    odds.add_argument("--max-seconds", type=float, default=20.0, help="time limit per hand (default 20)")
+    odds.add_argument("--total-seconds", type=float, default=1800.0, help="time limit for the whole run (default 1800)")
+    odds.add_argument("--include-sets", action="store_true", help="also try setting cards")
+    odds.add_argument("--show-lines", action="store_true", help="print the combo for each hit")
+    odds.add_argument("--any-size", action="store_true", help="skip 40-60 card size check")
+    odds.set_defaults(func=cmd_odds)
 
     imp = sub.add_parser("import", help="import a deck (ydke://, .ydk or text list) into decks/")
     imp.add_argument("source", help="a ydke:// string, a .ydk or .txt file, or - to paste text")

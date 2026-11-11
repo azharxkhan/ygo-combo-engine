@@ -60,6 +60,28 @@ If a card name has a comma in it, separate the cards with `;` instead:
 `--hand "Nibiru, the Primal Being; Ash Blossom & Joyous Spring; Terraforming"`.
 Deck files are `.ydk` (export from EDOPro or YGOPRODeck).
 
+## Hand odds
+
+How often does a random opening hand reach a board? This draws random hands
+and runs the combo search on each one, so a hand only counts if the engine
+actually plays it into the board. No tagging cards as starters or bricks.
+
+```bash
+PYTHONPATH=src python3 -m ygocombo odds \
+  --deck decks/invoked_sample.ydk --want "Invoked Mechaba" --hands 100
+```
+
+Every hand is reported as **hit** (reached the board), **miss** (every line
+within the limits was tried, none got there) or **unknown** (the search hit
+its limit first; raise `--max-nodes` / `--max-seconds` to settle these). The
+summary gives the hit rate and a 95% range for the true rate. 100 hands of
+the sample deck take about 40 seconds. `--seed` picks a different set of
+hands, `--hand-size 6` adds a sixth card, `--show-lines` prints each hit's
+combo, and `--total-seconds` caps the whole run (default 30 minutes).
+
+The odds are only as good as the search: a miss means "not found within the
+limits", and the goldfish opponent never interrupts.
+
 ## Import decks
 
 Found a deck online? Import it into `decks/`:
