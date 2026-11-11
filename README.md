@@ -80,6 +80,33 @@ is replayed in the engine and every arrow is a move the engine reported. A
 single file with no scripts, so it opens offline and can be shared as is.
 Existing files are not replaced unless you add `--force`.
 
+## What interrupts it
+
+Give the opponent hand traps and see where they hit your combo:
+
+```bash
+PYTHONPATH=src python3 -m ygocombo interrupt \
+  --deck decks/invoked_sample.ydk \
+  --hand "Aleister the Invoker, Honest, Book of Moon, Effect Veiler, Twin Twisters" \
+  --want "Invoked Mechaba" --opp "Ash Blossom & Joyous Spring; Effect Veiler"
+```
+
+It finds your best few lines, then replays each one. Every time the engine
+lets the opponent activate one of their cards, that is an interruption point.
+For each point the opponent activates there (each target is tried), and the
+combo search runs again to find your best play from that position. You get:
+
+- every point where each line can be interrupted, and whether you still make
+  the board after it,
+- the worst case for each line, with the best way to play on from there,
+- the lines ranked so the one that holds up best against those hand traps
+  comes first.
+
+The engine decides what is legal: Ash Blossom only shows up when a search or
+special summon is activated, for example. The opponent uses one card, once,
+then passes. `--lines`, `--recovery-nodes`, `--recovery-seconds` and
+`--total-seconds` (default 15 minutes) cap the work.
+
 ## Hand odds
 
 How often does a random opening hand reach a board? This draws random hands

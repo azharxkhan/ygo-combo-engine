@@ -3,6 +3,7 @@
   python -m ygocombo moves --deck decks/x.ydk --hand "Card A, Card B"
   python -m ygocombo solve --deck decks/x.ydk --hand "Card A, Card B" --want "Boss Monster"
   python -m ygocombo odds --deck decks/x.ydk --want "Boss Monster" --hands 50
+  python -m ygocombo interrupt --deck decks/x.ydk --hand "..." --want "Boss Monster" --opp "Ash Blossom & Joyous Spring"
   python -m ygocombo import "ydke://..." --name my_deck
 """
 
@@ -17,7 +18,10 @@ from .carddb import CardDatabase
 from .decisions import parse_decision
 from .deck import DeckError, load_ydk, validate_deck
 from .engine import EngineError, Environment, project_databases
-from .goldfish import HAND_MAX, Scenario, board_summary, new_duel
+from .goldfish import HAND_MAX, OPPONENT_HAND_MAX, Scenario, board_summary, new_duel
+from .interrupt import MAX_LINES as INTERRUPT_LINES_MAX
+from .interrupt import TOTAL_SECONDS_MAX as INTERRUPT_SECONDS_MAX
+from .interrupt import Outcome, analyse
 from .importer import check_deck_name, parse_text, read_deck, save_deck, to_ydke
 from .odds import TOTAL_SECONDS_MAX, HandResult, check_settings, run_odds, wilson_interval
 from .search import BoardScorer, ComboSearch, Limits
@@ -206,6 +210,78 @@ def cmd_odds(args) -> int:
     return 0
 
 
+def _outcome_text(outcome: Outcome, wanted: bool) -> str:
+    if outcome.stopped_by not in ("finished", "goal") and not outcome.reached_goal:
+        verdict = "UNSURE (search limit hit)"
+    elif wanted:
+        verdict = "still makes the board" if outcome.reached_goal else "STOPS the board"
+    else:
+        verdict = f"score drops to {outcome.score:g}"
+    monsters = [n.split(" [")[0] for n in outcome.board.get("monster zone", [])]
+    left = f"; you end with: {', '.join(monsters) or 'no monsters'}" if not outcome.reached_goal else ""
+    return f"{verdict}{left}"
+
+
+def cmd_interrupt(args) -> int:
+    env, plain = _setup(args)
+    wanted = ()
+    if args.want:
+        wanted = resolve_cards(args.want, env.db, limit=MAX_WANTED, what="--want")
+    opponent = resolve_cards(args.opp, env.db, limit=OPPONENT_HAND_MAX, what="--opp")
+    db = env.db
+    try:
+        scenario = Scenario(plain.deck, plain.hand, seed=plain.seed, opponent_hand=opponent)
+        limits = Limits(max_nodes=args.max_nodes, max_depth=args.max_depth,
+                        max_seconds=args.max_seconds, include_sets=args.include_sets)
+        recovery = Limits(max_nodes=args.recovery_nodes, max_depth=args.max_depth,
+                          max_seconds=args.recovery_seconds, include_sets=args.include_sets)
+        if not 1 <= args.lines <= INTERRUPT_LINES_MAX:
+            raise ValueError(f"--lines must be 1-{INTERRUPT_LINES_MAX}")
+        if not 0 < args.total_seconds <= INTERRUPT_SECONDS_MAX:
+            raise ValueError(f"--total-seconds must be above 0 and at most {INTERRUPT_SECONDS_MAX:g}")
+        print(f"Opponent holds: {', '.join(db.name(c) for c in opponent)} "
+              "(they use one card, once). Searching...", flush=True)
+        result = analyse(env, scenario, wanted, lines=args.lines, limits=limits,
+                         recovery_limits=recovery, total_seconds=args.total_seconds)
+    except ValueError as exc:
+        raise InputError(str(exc)) from exc
+
+    checked = sum(len(r.outcomes) for r in result.reports)
+    print(f"Found {len(result.reports)} lines, checked {checked} interruption points "
+          f"in {result.seconds:.0f}s.")
+    if result.base_stopped_by != "finished":
+        print("The first search was cut short, so other lines may exist. Raise --max-nodes / --max-seconds.")
+    if result.stopped_by != "finished":
+        print("Stopped early: --total-seconds ran out, so some points were not checked.")
+    for rank, report in enumerate(result.reports, start=1):
+        line = report.line
+        monsters = [n.split(" [")[0] for n in line.board.get("monster zone", [])]
+        title = "safest line" if rank == 1 else f"line {rank}"
+        print(f"\n#{rank} ({title}): {', '.join(monsters) or 'no monsters'} if nobody interrupts "
+              f"(score {line.score:g}, {len(line.steps)} steps)")
+        for number, step in enumerate(line.steps, start=1):
+            print(f"  {number}. {step}")
+        if not report.outcomes:
+            print("  The opponent never gets a chance to use their cards on this line.")
+            continue
+        print(f"  Where it can be interrupted ({len(report.outcomes)}):")
+        for outcome in report.outcomes:
+            point = outcome.interruption
+            where = f"after step {point.after_steps}" if point.after_steps else "before your first move"
+            print(f"    - {where}: {' -> '.join(point.opponent)}: {_outcome_text(outcome, bool(wanted))}")
+        if report.points_capped:
+            print("    (more points exist, only the first ones were checked)")
+        worst = report.worst
+        print(f"  Worst case: {' -> '.join(worst.interruption.opponent)} "
+              f"after step {worst.interruption.after_steps}. Best play from there:")
+        for number, step in enumerate(worst.steps, start=1):
+            print(f"    {number}. {step}")
+        if not worst.steps:
+            print("    (nothing useful left to do)")
+        _print_board(worst.board, indent="    ")
+    return 0
+
+
 def cmd_import(args) -> int:
     check_deck_name(args.name)  # fail before doing any work
     try:
@@ -275,6 +351,20 @@ def build_parser() -> argparse.ArgumentParser:
     odds.add_argument("--show-lines", action="store_true", help="print the combo for each hit")
     odds.add_argument("--any-size", action="store_true", help="skip 40-60 card size check")
     odds.set_defaults(func=cmd_odds)
+
+    inter = sub.add_parser("interrupt", help="where hand traps stop a line, and how to play around them")
+    common(inter)
+    inter.add_argument("--opp", required=True, help="opponent's hand traps (same format as --hand)")
+    inter.add_argument("--want", default="", help="cards you want on the field (same format as --hand)")
+    inter.add_argument("--lines", type=int, default=3, help="how many of the best lines to test (default 3)")
+    inter.add_argument("--max-nodes", type=int, default=2000)
+    inter.add_argument("--max-depth", type=int, default=40)
+    inter.add_argument("--max-seconds", type=float, default=60.0)
+    inter.add_argument("--recovery-nodes", type=int, default=300, help="search limit after each interruption")
+    inter.add_argument("--recovery-seconds", type=float, default=20.0, help="time limit after each interruption")
+    inter.add_argument("--total-seconds", type=float, default=900.0, help="time limit for the whole run")
+    inter.add_argument("--include-sets", action="store_true", help="also try setting cards")
+    inter.set_defaults(func=cmd_interrupt)
 
     imp = sub.add_parser("import", help="import a deck (ydke://, .ydk or text list) into decks/")
     imp.add_argument("source", help="a ydke:// string, a .ydk or .txt file, or - to paste text")

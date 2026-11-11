@@ -152,6 +152,7 @@ class ComboSearch:
         scorer: BoardScorer | None = None,
         keep: int = 5,
         stop_at_goal: bool = False,
+        prefix: tuple[bytes, ...] = (),
     ):
         if not 1 <= keep <= 100:
             raise ValueError("keep must be 1-100")
@@ -161,6 +162,12 @@ class ComboSearch:
         self.scorer = scorer or BoardScorer(env)
         self.keep = keep
         self.stop_at_goal = stop_at_goal  # end the search once scorer.meets_goal()
+        if len(prefix) > RESPONSES_PER_LINE_MAX:
+            raise ValueError("prefix is too long")
+        # Answers to replay before searching. Used to search from a position
+        # reached some other way, e.g. right after the opponent interrupted.
+        # Line.steps then only lists the moves made after the prefix.
+        self.prefix = tuple(prefix)
 
     # ---- public
 
@@ -170,7 +177,7 @@ class ComboSearch:
         deadline = started + self.limits.max_seconds
         seen: set = set()
         best: dict[tuple, Line] = {}  # board fingerprint -> best line reaching it
-        stack = [_Branch((), (), 0)]
+        stack = [_Branch(self.prefix, (), 0)]
 
         while stack:
             if result.nodes >= self.limits.max_nodes:

@@ -13,6 +13,7 @@ from .deck import Deck
 from .engine import Duel, Environment
 
 HAND_MAX = 10
+OPPONENT_HAND_MAX = 6
 
 
 @dataclass(frozen=True)
@@ -22,10 +23,15 @@ class Scenario:
     deck: Deck
     hand: tuple[int, ...]
     seed: int = 1
+    # Cards the opponent holds (hand traps). They only use them when told to:
+    # the plain search still has the opponent pass on everything.
+    opponent_hand: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if not 1 <= len(self.hand) <= HAND_MAX:
             raise ValueError(f"hand must have 1-{HAND_MAX} cards")
+        if len(self.opponent_hand) > OPPONENT_HAND_MAX:
+            raise ValueError(f"opponent hand can have at most {OPPONENT_HAND_MAX} cards")
         remaining = list(self.deck.main)
         for code in self.hand:
             if code not in remaining:
@@ -52,6 +58,8 @@ def new_duel(env: Environment, scenario: Scenario) -> Duel:
             duel.add_card(code, 0, C.LOCATION_EXTRA)
         for code in scenario.hand:
             duel.add_card(code, 0, C.LOCATION_HAND)
+        for code in scenario.opponent_hand:
+            duel.add_card(code, 1, C.LOCATION_HAND)
         duel.start()
     except Exception:
         duel.close()
