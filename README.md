@@ -60,6 +60,26 @@ If a card name has a comma in it, separate the cards with `;` instead:
 `--hand "Nibiru, the Primal Being; Ash Blossom & Joyous Spring; Terraforming"`.
 Deck files are `.ydk` (export from EDOPro or YGOPRODeck).
 
+## Combo board
+
+Add `--board combo.html` to `solve` to draw the best line as a diagram:
+
+```bash
+PYTHONPATH=src python3 -m ygocombo solve \
+  --deck decks/invoked_sample.ydk \
+  --hand "Aleister the Invoker, Honest, Book of Moon, Effect Veiler, Twin Twisters" \
+  --want "Invoked Mechaba" --keep 1 --board combo.html
+```
+
+Each card is a box, and each arrow is something one card did to another:
+"adds to hand", "fusion summons", "material for", "discards" and so on. Below
+the diagram is every step with each card move (from where, to where, and
+which card caused it), then the end board. Nothing is drawn by hand: the line
+is replayed in the engine and every arrow is a move the engine reported. A
+`combo.json` with the same data is written next to the page. The page is a
+single file with no scripts, so it opens offline and can be shared as is.
+Existing files are not replaced unless you add `--force`.
+
 ## Hand odds
 
 How often does a random opening hand reach a board? This draws random hands

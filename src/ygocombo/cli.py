@@ -12,6 +12,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from .board import check_board_path, trace_line, write_board
 from .carddb import CardDatabase
 from .decisions import parse_decision
 from .deck import DeckError, load_ydk, validate_deck
@@ -100,6 +101,12 @@ def cmd_moves(args) -> int:
 
 
 def cmd_solve(args) -> int:
+    board_path = None
+    if args.board:
+        try:
+            board_path = check_board_path(args.board, overwrite=args.force)
+        except ValueError as exc:
+            raise InputError(str(exc)) from exc
     env, scenario = _setup(args)
     wanted = ()
     if args.want:
@@ -136,6 +143,14 @@ def cmd_solve(args) -> int:
             print(f"  {number}. {step}")
         print("  End board:")
         _print_board(line.board, indent="    ")
+    if board_path:
+        if not result.lines:
+            print("\nNo line found, so no combo board was written.")
+        else:
+            hand = ", ".join(env.db.name(c) for c in scenario.hand)
+            board = trace_line(env, scenario, result.lines[0].responses, title=f"Combo: {hand}")
+            html_path, json_path = write_board(board, board_path)
+            print(f"\nCombo board for line #1: {html_path} (data: {json_path})")
     return 0
 
 
@@ -242,6 +257,8 @@ def build_parser() -> argparse.ArgumentParser:
     solve.add_argument("--max-seconds", type=float, default=60.0)
     solve.add_argument("--keep", type=int, default=3, help="how many lines to show")
     solve.add_argument("--include-sets", action="store_true", help="also try setting cards")
+    solve.add_argument("--board", default="", help="write the best line as a combo board, e.g. combo.html")
+    solve.add_argument("--force", action="store_true", help="replace an existing --board file")
     solve.set_defaults(func=cmd_solve)
 
     odds = sub.add_parser("odds", help="how often a random hand reaches the wanted board")

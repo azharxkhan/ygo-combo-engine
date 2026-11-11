@@ -62,6 +62,7 @@ class Line:
     score: float
     steps: tuple[str, ...]
     board: dict[str, list[str]]
+    responses: tuple[bytes, ...] = ()  # engine answers that replay this line exactly
 
 
 @dataclass
@@ -224,7 +225,7 @@ class ComboSearch:
                 if decision.kind == "idle":
                     result.nodes += 1
                     fingerprint = _fingerprint(duel, decision)
-                    self._record(duel, steps, fingerprint[0], best)
+                    self._record(duel, steps, responses, fingerprint[0], best)
                     if self.scorer.meets_goal(duel):
                         if not result.reached_goal:
                             result.reached_goal = True
@@ -300,11 +301,12 @@ class ComboSearch:
         uncancelled = [c for c in choices if c.action != "cancel"]
         return _drop_identical(uncancelled or choices)
 
-    def _record(self, duel: Duel, steps: list[str], board_key: tuple, best: dict) -> None:
+    def _record(self, duel: Duel, steps: list[str], responses: list[bytes], board_key: tuple,
+                best: dict) -> None:
         score = self.scorer.score(duel)
         current = best.get(board_key)
         if current is None or (score, -len(steps)) > (current.score, -len(current.steps)):
-            best[board_key] = Line(score, tuple(steps), board_summary(duel))
+            best[board_key] = Line(score, tuple(steps), board_summary(duel), tuple(responses))
 
 
 def _opponent_choice(decision: Decision) -> Choice:
