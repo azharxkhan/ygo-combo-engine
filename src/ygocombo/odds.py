@@ -107,6 +107,7 @@ def run_odds(
     limits: Limits | None = None,
     total_seconds: float = 1800.0,
     on_hand: Callable[[int, HandResult], None] | None = None,
+    clean_lines: bool = False,
 ) -> OddsResult:
     """Sample opening hands and search each one for the wanted board."""
     if not wanted:
@@ -138,7 +139,7 @@ def run_odds(
             )
             search = ComboSearch(
                 env, Scenario(deck, hand, seed=shuffle_seed),
-                limits=hand_limits, scorer=scorer, keep=1, stop_at_goal=True,
+                limits=hand_limits, scorer=scorer, keep=1, stop_at_goal=True, simplify=clean_lines,
             )
             found = search.run()
             if found.reached_goal:

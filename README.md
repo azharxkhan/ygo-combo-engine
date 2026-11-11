@@ -60,6 +60,42 @@ If a card name has a comma in it, separate the cards with `;` instead:
 `--hand "Nibiru, the Primal Being; Ash Blossom & Joyous Spring; Terraforming"`.
 Deck files are `.ydk` (export from EDOPro or YGOPRODeck).
 
+Found lines are cleaned up before they are shown: each move (with its costs
+and targets) is taken out in turn and the rest is replayed in the engine. The
+shorter line is kept if the end board is at least as good, so moves like
+Twin Twisters on your own spell are dropped.
+
+## Is a combo possible?
+
+Ask whether a hand can make a board:
+
+```bash
+PYTHONPATH=src python3 -m ygocombo check --deck decks/invoked_sample.ydk \
+  --hand "Aleister the Invoker, Honest, Book of Moon, Effect Veiler, Twin Twisters" \
+  --want "Invoked Mechaba"
+```
+
+The answer is **POSSIBLE** (with the line as proof), **NOT POSSIBLE** (every
+line the search explores was tried) or **UNKNOWN** (the search hit its limit
+first). NOT POSSIBLE is within the search's rules: the first legal zone and
+battle position are used, cards are set only with `--include-sets`, and the
+opponent never responds. When it fails, it shows the best board it got and
+which wanted cards were missing.
+
+Or test a combo you wrote. Put the steps in a text file, one per line, worded
+exactly like `solve` prints them (`1.` numbers and `#` comments are fine):
+
+```bash
+PYTHONPATH=src python3 -m ygocombo check --deck decks/invoked_sample.ydk \
+  --hand "Aleister the Invoker, Honest, Book of Moon, Effect Veiler, Twin Twisters" \
+  --want "Invoked Mechaba" --line my_combo.txt
+```
+
+The engine plays your steps in order. If a step is not legal at that point,
+it stops there and lists what was legal. Prompts you did not write a step for
+are answered "Do not chain" / "No" (and listed, so a forgotten "Use effect
+of ..." is easy to spot). Names are never guessed.
+
 ## Combo board
 
 Add `--board combo.html` to `solve` to draw the best line as a diagram:

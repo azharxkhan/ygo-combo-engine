@@ -10,6 +10,9 @@ How it works, in plain words:
   try the next untried branch.
 * Every time the engine asks "what do you want to do in your Main Phase?"
   we score the board. That is a point where you could stop and end your turn.
+* At your own chain prompts "Do not chain" is tried first, and the kept lines
+  are cleaned up afterwards (see ComboSearch.simplify), so lines do not carry
+  moves that gain nothing.
 
 Known shortcuts (see docs/BUILD_PLAN.md for the plan to remove them):
 
@@ -35,6 +38,10 @@ DEPTH_LIMIT_MAX = 200
 TIME_LIMIT_MAX = 3600.0
 PENDING_BRANCH_MAX = 100_000
 RESPONSES_PER_LINE_MAX = 2_000  # engine answers in one line, including forced ones
+SIMPLIFY_REPLAYS_MAX = 150  # replays spent cleaning up the kept lines of one search
+_PASS_LABEL = "Do not chain"  # must match decisions._select_chain
+_MOVE_ACTIONS = {"activate", "summon", "spsummon", "sset", "mset", "reposition", "yes"}
+_MOVE_PROMPTS = ("idle", "chain", "effect_yes_no")
 
 _IDLE_ORDER = {"activate": 0, "spsummon": 1, "summon": 2, "sset": 3, "mset": 4, "reposition": 5}
 _FIRST_ONLY_KINDS = {"place", "position", "sort", "rps"}
@@ -63,6 +70,7 @@ class Line:
     steps: tuple[str, ...]
     board: dict[str, list[str]]
     responses: tuple[bytes, ...] = ()  # engine answers that replay this line exactly
+    meets_goal: bool = False  # every wanted card is on the field at the end
 
 
 @dataclass
@@ -153,6 +161,7 @@ class ComboSearch:
         keep: int = 5,
         stop_at_goal: bool = False,
         prefix: tuple[bytes, ...] = (),
+        simplify: bool = True,
     ):
         if not 1 <= keep <= 100:
             raise ValueError("keep must be 1-100")
@@ -168,6 +177,7 @@ class ComboSearch:
         # reached some other way, e.g. right after the opponent interrupted.
         # Line.steps then only lists the moves made after the prefix.
         self.prefix = tuple(prefix)
+        self.simplify_lines = simplify  # drop moves that do not help (see simplify)
 
     # ---- public
 
@@ -191,6 +201,18 @@ class ComboSearch:
         result.lines = sorted(best.values(), key=lambda line: (-line.score, len(line.steps)))[
             : self.keep
         ]
+        if self.simplify_lines and result.lines:
+            budget = [SIMPLIFY_REPLAYS_MAX]
+            cleaned: dict[tuple, Line] = {}
+            for line in result.lines:
+                line = self.simplify(line, budget)
+                key = tuple((zone, tuple(names)) for zone, names in line.board.items())
+                if key not in cleaned or len(line.steps) < len(cleaned[key].steps):
+                    cleaned[key] = line
+            result.lines = sorted(cleaned.values(), key=lambda line: (-line.score, len(line.steps)))
+            goal = next((line for line in result.lines if line.meets_goal), None)
+            if goal is not None:
+                result.goal_steps = goal.steps
         result.seconds = time.monotonic() - started
         return result
 
@@ -306,6 +328,10 @@ class ComboSearch:
         # again). Not using the card at all is already tried at the idle prompt.
         # Keep cancel only when it is the sole legal answer.
         uncancelled = [c for c in choices if c.action != "cancel"]
+        if decision.kind == "chain":
+            # Try "Do not chain" first. Otherwise the first line found chains
+            # every card it can, even when that does nothing useful.
+            uncancelled.sort(key=lambda c: c.action != "pass")
         return _drop_identical(uncancelled or choices)
 
     def _record(self, duel: Duel, steps: list[str], responses: list[bytes], board_key: tuple,
@@ -313,7 +339,122 @@ class ComboSearch:
         score = self.scorer.score(duel)
         current = best.get(board_key)
         if current is None or (score, -len(steps)) > (current.score, -len(current.steps)):
-            best[board_key] = Line(score, tuple(steps), board_summary(duel), tuple(responses))
+            best[board_key] = Line(score, tuple(steps), board_summary(duel), tuple(responses),
+                                   self.scorer.meets_goal(duel))
+
+    # ---- cleaning up a found line
+
+    def simplify(self, line: Line, budget: list[int]) -> Line:
+        """Drop moves that do not help, checked by replaying in the engine.
+
+        A move is one of your activations or summons plus the picks that
+        follow it (costs, targets). Each move is removed in turn and the rest
+        of the line is replayed by its labels. The shorter line is kept only
+        if the engine accepts every remaining pick and the end board scores
+        at least as well (and still has the wanted cards, if it had them).
+        budget is a one-item list: replays left, shared across lines.
+        """
+        entries = self._entries(line.responses)
+        if entries is None:
+            return line
+        current = line
+        changed = True
+        while changed and budget[0] > 0:
+            changed = False
+            for start in reversed(_move_starts(entries)):
+                if budget[0] <= 0:
+                    break
+                kind, label, _action = entries[start]
+                # A move made at the main prompt takes the whole chain it started
+                # with it; a chain link or trigger only takes its own picks.
+                stops = ("idle",) if kind == "idle" else _MOVE_PROMPTS
+                end = next((i for i in range(start + 1, len(entries))
+                            if entries[i][0] in stops), len(entries))
+                if kind == "chain":
+                    trial = entries[:start] + [("chain", _PASS_LABEL, "pass")] + entries[end:]
+                elif kind == "effect_yes_no":  # "Use effect of X" -> "Do not use effect of X"
+                    trial = entries[:start] + [(kind, "Do not use" + label[3:], "no")] + entries[end:]
+                else:
+                    trial = entries[:start] + entries[end:]
+                budget[0] -= 1
+                shorter = self._play(trial)
+                if (shorter is not None and shorter.score >= current.score
+                        and (shorter.meets_goal or not current.meets_goal)
+                        and len(shorter.steps) < len(current.steps)):
+                    current, entries, changed = shorter, trial, True
+                    break
+        return current
+
+    def _entries(self, responses: tuple[bytes, ...]) -> list[tuple[str, str, str]] | None:
+        """Your picks after the prefix as (prompt kind, label, action)."""
+        out: list[tuple[str, str, str]] = []
+        with new_duel(self.env, self.scenario) as duel:
+            try:
+                duel.advance()
+                for index, response in enumerate(responses):
+                    if duel.pending is None:
+                        return None
+                    decision = parse_decision(duel.pending, self.env.db)
+                    if index >= len(self.prefix) and decision.player == 0 and \
+                            decision.kind not in _FIRST_ONLY_KINDS:
+                        choice = next((c for c in decision.choices if c.response == response), None)
+                        if choice is None:
+                            return None
+                        out.append((decision.kind, choice.label, choice.action))
+                    duel.respond(response)
+                    duel.advance()
+            except (InvalidResponse, UnsupportedDecision):
+                return None
+        return out
+
+    def _play(self, entries: list[tuple[str, str, str]]) -> Line | None:
+        """Replay the prefix, then your picks by label. None if any pick is not legal."""
+        db = self.env.db
+        responses = list(self.prefix)
+        steps: list[str] = []
+        wanted = iter(entries)
+        with new_duel(self.env, self.scenario) as duel:
+            try:
+                turns = self._advance(duel)
+                for response in self.prefix:
+                    if duel.pending is None:
+                        return None
+                    duel.respond(response)
+                    turns += self._advance(duel)
+                next_pick = next(wanted, None)
+                while True:
+                    if duel.ended or duel.pending is None or turns > 1:
+                        return None
+                    if len(responses) >= RESPONSES_PER_LINE_MAX:
+                        return None
+                    decision = parse_decision(duel.pending, db)
+                    if decision.player != 0:
+                        choice = _opponent_choice(decision)
+                    elif decision.kind in _FIRST_ONLY_KINDS:
+                        choice = decision.choices[0]
+                    elif next_pick is None:
+                        if decision.kind != "idle":
+                            return None
+                        return Line(self.scorer.score(duel), tuple(steps), board_summary(duel),
+                                    tuple(responses), self.scorer.meets_goal(duel))
+                    else:
+                        kind, label, _action = next_pick
+                        choice = next((c for c in decision.choices if c.label == label), None)
+                        if decision.kind != kind or choice is None:
+                            return None
+                        steps.extend(_step(decision, choice))
+                        next_pick = next(wanted, None)
+                    responses.append(choice.response)
+                    duel.respond(choice.response)
+                    turns += self._advance(duel)
+            except (InvalidResponse, UnsupportedDecision):
+                return None
+
+
+def _move_starts(entries: list[tuple[str, str, str]]) -> list[int]:
+    """Where each of your moves starts: an activation, summon or set you chose."""
+    return [i for i, (kind, _label, action) in enumerate(entries)
+            if kind in _MOVE_PROMPTS and action in _MOVE_ACTIONS]
 
 
 def _opponent_choice(decision: Decision) -> Choice:

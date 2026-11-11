@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .board import check_board_path, trace_line, write_board
 from .carddb import CardDatabase
+from .check import can_make, check_line, read_line_file
 from .decisions import parse_decision
 from .deck import DeckError, load_ydk, validate_deck
 from .engine import EngineError, Environment, project_databases
@@ -183,7 +184,7 @@ def cmd_odds(args) -> int:
               "Each one is searched for the wanted board.", flush=True)
         result = run_odds(env, deck, wanted, hands=args.hands, hand_size=args.hand_size,
                           seed=args.seed, limits=limits, total_seconds=args.total_seconds,
-                          on_hand=show)
+                          on_hand=show, clean_lines=args.show_lines)
     except ValueError as exc:
         raise InputError(str(exc)) from exc
 
@@ -208,6 +209,64 @@ def cmd_odds(args) -> int:
         print("Unknown = the search hit its limit before finding the board. "
               "Raise --max-nodes / --max-seconds to settle them.")
     return 0
+
+
+def cmd_check(args) -> int:
+    env, scenario = _setup(args)
+    wanted = ()
+    if args.want:
+        wanted = resolve_cards(args.want, env.db, limit=MAX_WANTED, what="--want")
+    try:
+        if args.line:
+            steps = read_line_file(Path(args.line))
+            result = check_line(env, scenario, steps, wanted)
+        else:
+            limits = Limits(max_nodes=args.max_nodes, max_depth=args.max_depth,
+                            max_seconds=args.max_seconds, include_sets=args.include_sets)
+            made = can_make(env, scenario, wanted, limits)
+    except ValueError as exc:
+        raise InputError(str(exc)) from exc
+
+    if args.line:
+        if result.ok:
+            print(f"The line works: all {result.steps_done} steps are legal.")
+            if wanted:
+                print("It makes the wanted board." if result.meets_goal
+                      else "But it does NOT end with every wanted card on the field.")
+        else:
+            print(f"The line breaks after {result.steps_done} of {len(steps)} steps: {result.error}.")
+            if result.legal:
+                print("Legal choices at that point:")
+                for label in result.legal:
+                    print(f"  - {label}")
+            if result.declined:
+                print("You did not write a step for these optional effects, so they were not used:")
+                for label in result.declined:
+                    print(f"  - {label}")
+        if result.board:
+            print("Board at that point:" if not result.ok else "End board:")
+            _print_board(result.board)
+        return 0 if result.ok and (result.meets_goal or not wanted) else 1
+
+    names = ", ".join(env.db.name(c) for c in wanted)
+    search = made.search
+    if made.verdict == "possible":
+        print(f"POSSIBLE: this hand can make {names}. Found after {search.nodes} positions:")
+        for number, step in enumerate(made.line.steps, start=1):
+            print(f"  {number}. {step}")
+        _print_board(made.line.board)
+        return 0
+    if made.verdict == "not found":
+        print(f"NOT POSSIBLE: no line makes {names} ({search.nodes} positions, every line tried).")
+        print("That is within the search's rules: the first legal zone and battle position are "
+              "used, cards are only set with --include-sets, and the opponent never responds.")
+    else:
+        print(f"UNKNOWN: no line found yet, but the search stopped at its limit ({search.stopped_by}). "
+              "Raise --max-nodes / --max-seconds.")
+    if made.line:
+        print(f"Best board it reached is missing: {', '.join(made.missing)}")
+        _print_board(made.line.board)
+    return 1
 
 
 def _outcome_text(outcome: Outcome, wanted: bool) -> str:
@@ -351,6 +410,16 @@ def build_parser() -> argparse.ArgumentParser:
     odds.add_argument("--show-lines", action="store_true", help="print the combo for each hit")
     odds.add_argument("--any-size", action="store_true", help="skip 40-60 card size check")
     odds.set_defaults(func=cmd_odds)
+
+    chk = sub.add_parser("check", help="is a combo possible? (search for it, or test your written line)")
+    common(chk)
+    chk.add_argument("--want", default="", help="cards that must end on the field (same format as --hand)")
+    chk.add_argument("--line", default="", help="a text file with your steps, one per line, worded like solve's output")
+    chk.add_argument("--max-nodes", type=int, default=5000)
+    chk.add_argument("--max-depth", type=int, default=40)
+    chk.add_argument("--max-seconds", type=float, default=120.0)
+    chk.add_argument("--include-sets", action="store_true", help="also try setting cards")
+    chk.set_defaults(func=cmd_check)
 
     inter = sub.add_parser("interrupt", help="where hand traps stop a line, and how to play around them")
     common(inter)
