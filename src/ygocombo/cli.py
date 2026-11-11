@@ -27,11 +27,17 @@ class InputError(ValueError):
 
 
 def resolve_cards(raw: str, db: CardDatabase, *, limit: int, what: str) -> tuple[int, ...]:
-    """Turn "Name One, 12345678, Name Two" into card codes. Fails loudly."""
+    """Turn "Name One, 12345678, Name Two" into card codes. Fails loudly.
+
+    Many card names contain a comma ("Nibiru, the Primal Being"). If the list
+    has any ";" it is split on ";" only, so those names can be typed. No card
+    name contains a ";".
+    """
     if len(raw) > MAX_LIST_ARG_CHARS:
         raise InputError(f"{what} list is too long")
+    separator = ";" if ";" in raw else ","
     codes: list[int] = []
-    for part in raw.split(","):
+    for part in raw.split(separator):
         entry = part.strip()
         if not entry:
             continue
@@ -44,7 +50,10 @@ def resolve_cards(raw: str, db: CardDatabase, *, limit: int, what: str) -> tuple
         else:
             record = db.find_by_name(entry)
             if record is None:
-                raise InputError(f"unknown card name in {what}: {entry!r} (names must match exactly)")
+                hint = " (names must match exactly"
+                if separator == ",":
+                    hint += "; if a name has a comma, separate cards with ';' instead"
+                raise InputError(f"unknown card name in {what}: {entry!r}{hint})")
             codes.append(record.code)
     if not codes:
         raise InputError(f"{what} is empty")
@@ -131,7 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--deck", required=True, help="path to a .ydk deck file")
-        p.add_argument("--hand", required=True, help="comma separated card names or codes")
+        p.add_argument("--hand", required=True, help="card names or codes, separated by ',' (or ';' if a name has a comma)")
         p.add_argument("--seed", type=int, default=1, help="deck shuffle seed (default 1)")
         p.add_argument("--any-size", action="store_true", help="skip 40-60 card size check")
 
@@ -141,7 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     solve = sub.add_parser("solve", help="search for the best turn 1 board")
     common(solve)
-    solve.add_argument("--want", default="", help="cards you want on the field (names or codes)")
+    solve.add_argument("--want", default="", help="cards you want on the field (same format as --hand)")
     solve.add_argument("--max-nodes", type=int, default=2000)
     solve.add_argument("--max-depth", type=int, default=40)
     solve.add_argument("--max-seconds", type=float, default=60.0)

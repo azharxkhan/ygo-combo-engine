@@ -97,6 +97,21 @@ def test_search_does_not_loop_on_cancel(env, scenario):
     assert any("Invoked Mechaba" in name for name in result.lines[0].board["monster zone"])
 
 
+def test_card_lists_with_commas_in_names(env):
+    from ygocombo.cli import InputError, resolve_cards
+
+    nibiru, ash = 27204311, 14558127
+    db = env.db
+    assert resolve_cards("Nibiru, the Primal Being; Ash Blossom & Joyous Spring", db,
+                         limit=5, what="hand") == (nibiru, ash)
+    # Without ";" the old comma split still applies.
+    assert resolve_cards("Ash Blossom & Joyous Spring, 27204311", db, limit=5, what="hand") == (ash, nibiru)
+    with pytest.raises(InputError, match="separate cards with ';'"):
+        resolve_cards("Nibiru, the Primal Being", db, limit=5, what="hand")
+    with pytest.raises(InputError):
+        resolve_cards("Nibiru; the Primal Being", db, limit=5, what="hand")
+
+
 def test_limits_are_validated():
     from ygocombo.search import Limits
 

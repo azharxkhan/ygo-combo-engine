@@ -56,6 +56,8 @@ PYTHONPATH=src python3 -m ygocombo solve \
 ```
 
 `--hand` and `--want` take exact card names or passcodes, separated by commas.
+If a card name has a comma in it, separate the cards with `;` instead:
+`--hand "Nibiru, the Primal Being; Ash Blossom & Joyous Spring; Terraforming"`.
 Deck files are `.ydk` (export from EDOPro or YGOPRODeck).
 
 ## Limits to know about
